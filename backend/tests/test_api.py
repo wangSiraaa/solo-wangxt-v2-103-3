@@ -23,8 +23,8 @@ def test_health_topology_and_isolation_flow():
         assert client.get("/api/health").json() == {"status": "ok"}
 
         topo = client.get("/api/topology").json()
-        assert len(topo["nodes"]) == 9
-        assert len(topo["valves"]) == 10
+        assert len(topo["nodes"]) == 11
+        assert len(topo["valves"]) == 12
 
         # 样例 1：无锁定
         r1 = client.post("/api/isolation", json={"target_id": "T"}).json()

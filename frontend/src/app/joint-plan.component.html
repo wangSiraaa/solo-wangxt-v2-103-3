@@ -1,0 +1,222 @@
+<section class="joint-box">
+  <h2>联合隔离计划（多区域）</h2>
+  <p class="hint">
+    一次检修可登记多个目标区域及各自保供点；系统在<b>同一张物理连通图</b>上求一个
+    去重的联合关阀集合。无解时不会部分应用任何区域的单目标方案。
+  </p>
+
+  @if (notice()) {
+    <div class="note-ok">{{ notice() }}</div>
+  }
+  @if (error()) {
+    <div class="note-bad">{{ error() }}</div>
+  }
+
+  <h3>1. 登记区域</h3>
+  <div class="draft-list">
+    @for (d of drafts(); track $index; let i = $index) {
+      <div class="draft-row">
+        <label>
+          目标
+          <select [(ngModel)]="drafts()[i].target_id" name="t{{ i }}">
+            @for (n of equipmentNodes; track n.id) {
+              <option [value]="n.id">{{ n.id }}（{{ n.name }}）</option>
+            }
+          </select>
+        </label>
+        <label class="supply-input">
+          保供点
+          <input
+            list="consumer-list"
+            [(ngModel)]="drafts()[i].supplies"
+            name="s{{ i }}"
+            placeholder="留空=必要供给点"
+          />
+        </label>
+        <button class="ghost mini" (click)="removeDraft(i)" [disabled]="drafts().length <= 1">
+          ✕
+        </button>
+      </div>
+    }
+  </div>
+  <datalist id="consumer-list">
+    @for (n of consumerNodes; track n.id) {
+      <option [value]="n.id">{{ n.name }}</option>
+    }
+  </datalist>
+  <div class="btns">
+    <button class="ghost" (click)="addDraft()">＋ 增加目标区域</button>
+    <button class="primary" [disabled]="busy()" (click)="submit()">
+      {{ busy() ? '求解中…' : '登记并联合求解' }}
+    </button>
+  </div>
+
+  <h3>2. 计划列表</h3>
+  @if (!plans().length) {
+    <p class="hint">暂无计划。</p>
+  }
+  <ul class="plan-list">
+    @for (p of plans(); track p.id) {
+      <li [class.active]="p.id === selectedId()">
+        <button class="plan-item" (click)="select(p.id)">
+          <span class="pid">{{ p.id }}</span>
+          <span class="pstatus" [class.bad]="!p.feasible">
+            {{ statusLabel(p.status) }} · {{ p.feasible ? '可行' : '无解' }}
+          </span>
+          <span class="ptargets">{{ regionTargets(p) }}</span>
+        </button>
+      </li>
+    }
+  </ul>
+
+  @if (selected(); as plan) {
+    <div class="plan-detail">
+      <h3>
+        3. 计划 {{ plan.id }}
+        <span class="pstatus" [class.bad]="!plan.feasible">{{ statusLabel(plan.status) }}</span>
+      </h3>
+
+      <table class="region-table">
+        <thead>
+          <tr>
+            <th>区域</th>
+            <th>保供点</th>
+            <th>归属阀门（见证）</th>
+            <th>状态/操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (r of plan.regions; track r.target_id) {
+            <tr [class.released]="r.status === 'released'">
+              <td><b>{{ r.target_id }}</b></td>
+              <td class="small">{{ formatSupplies(r.supply_node_ids) }}</td>
+              <td class="small">{{ r.required_valves.join('、') || '—' }}</td>
+              <td>
+                @if (r.status === 'released') {
+                  <em>已释放</em>
+                } @else if (plan.status === 'executing' && plan.feasible) {
+                  <button class="mini" (click)="release(r.target_id)" [disabled]="busy()">
+                    释放区域
+                  </button>
+                } @else {
+                  <span class="hint">{{ statusLabel(r.status) }}</span>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      @if (plan.feasible) {
+        <div class="ok">
+          ✓ 联合关阀集合（{{ plan.result.best_solution.length }} 只，已去重）：
+          <b>{{ plan.result.best_solution.join('、') }}</b>
+        </div>
+        @if (plan.result.shared_valves.length) {
+          <p class="hint share-line">
+            🔗 共享阀门（多个区域共同依赖，释放时逐个区域解除）：
+            <b>{{ plan.result.shared_valves.join('、') }}</b>
+          </p>
+        }
+        <h4>每只阀的区域见证</h4>
+        <ul class="valve-region-list">
+          @for (vr of plan.result.valve_regions; track vr.valve_id) {
+            <li>
+              <span class="vid">{{ vr.valve_id }}</span>
+              {{ valveName(vr.valve_id) }}
+              <em [class.share]="vr.shared">{{
+                vr.shared ? '共享于 ' + vr.regions.join('、') : '仅属 ' + vr.regions.join('、')
+              }}</em>
+            </li>
+          }
+        </ul>
+        <h4>各区域隔离证据与保供路径</h4>
+        @for (ev of plan.result.region_evidence; track ev.target_id) {
+          <div class="evidence">
+            <div>
+              区域 <b>{{ ev.target_id }}</b
+              >：目标{{ ev.target_isolated ? '已与所有来源断开' : '仍未断开！' }}；
+              边界阀 {{ ev.boundary_valves.join('、') }}
+            </div>
+            @for (p of ev.supply_node_ids; track p) {
+              <div class="supply-line">
+                ★ {{ p }} ←
+                <code>{{ ev.supply_paths[p]?.join(' → ') || '不可达' }}</code>
+              </div>
+            }
+          </div>
+        }
+
+        @if (plan.status === 'prepared') {
+          <button class="primary" [disabled]="busy()" (click)="execute()">
+            执行联合关阀（{{ plan.result.best_solution.length }} 只）
+          </button>
+        }
+      } @else {
+        <div class="bad">✗ 联合约束无解 —— 未对任何区域应用单目标方案</div>
+        <p class="reason">{{ plan.infeasible_reason }}</p>
+
+        @if (plan.result.contradictions.length) {
+          <h4>矛盾需求见证</h4>
+          <ul class="witness-list">
+            @for (c of plan.result.contradictions; track $index) {
+              <li>{{ c.message }}</li>
+            }
+          </ul>
+        }
+
+        <h4>各区域残余连通路径</h4>
+        @for (rp of plan.result.residual_paths; track rp.target_id) {
+          <div class="path residual-p">
+            <div class="small">[{{ rp.target_id }}]</div>
+            <code>{{ rp.nodes.join(' → ') }}</code>
+            @if (rp.locked_valves_on_path.length) {
+              <div class="meta">含锁定阀：{{ rp.locked_valves_on_path.join('、') }}</div>
+            }
+          </div>
+        }
+        @if (plan.result.locked_witness_paths.length) {
+          <h4>各区域经锁定阀的见证路径</h4>
+          @for (wp of plan.result.locked_witness_paths; track wp.target_id) {
+            <div class="path witness-p">
+              <div class="small">[{{ wp.target_id }}]</div>
+              <code>{{ wp.nodes.join(' → ') }}</code>
+              <div class="meta">锁定阀：{{ wp.locked_valves_on_path.join('、') }}</div>
+            </div>
+          }
+        }
+        @if (plan.result.unconstrained_best; as ub) {
+          <h4>切得掉全部目标但不可接受的最小联合切法</h4>
+          <p class="hint">
+            关闭 {{ ub.close_valves.join('、') || '（无需关阀）' }}（{{ ub.size }} 只）；
+          </p>
+          <ul class="witness-list">
+            @for (row of ub.per_region; track row.target_id) {
+              <li>
+                区域 {{ row.target_id }} 断供：{{
+                  row.disconnects_supplies.join('、') || '无'
+                }}；任何切法都保不住：{{ row.unavoidable_supplies.join('、') || '无' }}
+              </li>
+            }
+          </ul>
+        }
+      }
+
+      <h4>审计 / 计划快照时间线</h4>
+      <ul class="event-list">
+        @for (e of plan.events; track e.id) {
+          <li>
+            <span class="event-time">{{ eventTime(e.at) }}</span>
+            {{ eventLabel(e.kind) }}
+            @if (e.kind === 'restored') {
+              <span class="small">恢复 {{ reopenedValves(e.detail) }}</span>
+            }
+            @if (e.kind === 'region_released') {
+              <span class="small">{{ eventTarget(e.detail) }}</span>
+            }
+          </li>
+        }
+      </ul>
+    </div>
+  }
+</section>

@@ -1,12 +1,13 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { ApiService } from './api.service';
-import { IsolationResult, Topology } from './models';
+import { IsolationResult, JointPlan, Topology } from './models';
 import { NetworkGraphComponent } from './network-graph.component';
+import { JointPlanComponent } from './joint-plan.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [NetworkGraphComponent],
+  imports: [NetworkGraphComponent, JointPlanComponent],
   templateUrl: './app.component.html',
 })
 export class AppComponent implements OnInit {
@@ -14,6 +15,7 @@ export class AppComponent implements OnInit {
 
   topology = signal<Topology | null>(null);
   result = signal<IsolationResult | null>(null);
+  jointPlan = signal<JointPlan | null>(null);
   targetId = signal<string>('T');
   loading = signal(false);
   error = signal<string | null>(null);
@@ -44,6 +46,22 @@ export class AppComponent implements OnInit {
     });
   }
 
+  onJointPlanSelected(plan: JointPlan | null): void {
+    this.jointPlan.set(plan);
+    if (plan) {
+      this.result.set(null); // 联合计划高亮优先于单目标结果
+    }
+  }
+
+  onPlanChanged(): void {
+    // 关阀/释放会改变阀门 is_open，需重新拉拓扑以同步图与锁定面板
+    this.reload();
+    const id = this.jointPlan()?.id;
+    if (id) {
+      this.api.getJointPlan(id).subscribe((p) => this.jointPlan.set(p));
+    }
+  }
+
   toggleLock(valveId: string, locked: boolean): void {
     this.locks.update((l) => ({ ...l, [valveId]: locked }));
   }
@@ -54,6 +72,7 @@ export class AppComponent implements OnInit {
     this.api.isolate(this.targetId(), this.locks()).subscribe({
       next: (r) => {
         this.result.set(r);
+        this.jointPlan.set(null);
         // 同步锁定勾选状态（后端为权威来源）
         this.locks.update((l) => {
           const next = { ...l };
@@ -97,6 +116,7 @@ export class AppComponent implements OnInit {
             l[v.id] = v.locked;
           }
           this.locks.set(l);
+          this.jointPlan.set(null);
           applyLocksAndCompute();
         });
       });
@@ -108,6 +128,7 @@ export class AppComponent implements OnInit {
   resetAll(): void {
     this.api.reset().subscribe(() => {
       this.result.set(null);
+      this.jointPlan.set(null);
       this.reload();
     });
   }

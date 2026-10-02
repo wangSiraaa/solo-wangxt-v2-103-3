@@ -51,6 +51,7 @@ class TopologyOut(BaseModel):
     nodes: list[NodeOut]
     segments: list[SegmentOut]
     valves: list[ValveOut]
+    active_plans: list[dict[str, Any]] = []
 
 
 class IsolationSolution(BaseModel):
@@ -88,3 +89,22 @@ class IsolationOut(BaseModel):
     locked_witness_path: dict[str, Any] | None = None
     infeasible_reason: str | None = None
     unconstrained_best: dict[str, Any] | None = None
+
+
+# ---------------- 联合隔离计划 ----------------
+
+
+class JointRegionIn(BaseModel):
+    target_id: str = Field(..., description="待隔离目标区域的设备节点 id")
+    supply_node_ids: list[str] | None = Field(
+        None, description="该区域仍要求保供的节点；缺省/为空 = 全部必要供给点(essential)"
+    )
+
+
+class JointPlanIn(BaseModel):
+    regions: list[JointRegionIn] = Field(..., description="多个目标区域及其各自必要供给点")
+
+
+class JointRegionAddIn(BaseModel):
+    target_id: str
+    supply_node_ids: list[str] | None = None

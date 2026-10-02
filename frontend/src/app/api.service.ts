@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
-import { IsolationResult, Topology } from './models';
+import { IsolationResult, JointPlan, JointRegionInput, Topology } from './models';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -24,5 +24,34 @@ export class ApiService {
       target_id: targetId,
       locks: locks ?? null,
     });
+  }
+
+  // ---------------- 联合隔离计划 ----------------
+
+  createJointPlan(regions: JointRegionInput[]): Observable<JointPlan> {
+    return this.http.post<JointPlan>('/api/joint-plans', { regions });
+  }
+
+  listJointPlans(): Observable<JointPlan[]> {
+    return this.http.get<JointPlan[]>('/api/joint-plans');
+  }
+
+  getJointPlan(id: string): Observable<JointPlan> {
+    return this.http.get<JointPlan>(`/api/joint-plans/${id}`);
+  }
+
+  addJointRegion(id: string, region: JointRegionInput): Observable<JointPlan> {
+    return this.http.post<JointPlan>(`/api/joint-plans/${id}/regions`, region);
+  }
+
+  executeJointPlan(id: string): Observable<JointPlan> {
+    return this.http.post<JointPlan>(`/api/joint-plans/${id}/execute`, {});
+  }
+
+  releaseJointRegion(id: string, targetId: string): Observable<JointPlan> {
+    return this.http.post<JointPlan>(
+      `/api/joint-plans/${id}/regions/${targetId}/release`,
+      {},
+    );
   }
 }
