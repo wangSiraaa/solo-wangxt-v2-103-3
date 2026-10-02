@@ -1,4 +1,4 @@
-"""FastAPI 入口：拓扑查询、阀门锁定、隔离方案计算。"""
+"""FastAPI 入口：拓扑查询、阀门锁定、隔离方案计算、联合隔离计划。"""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -9,11 +9,19 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import isolation
+from . import isolation, plans
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
-from .models import Valve
-from .schemas import IsolationIn, IsolationOut, TopologyOut, ValveLockIn
+from .models import IsolationPlan, Valve
+from .schemas import (
+    IsolationIn,
+    IsolationOut,
+    PlanCreateIn,
+    PlanOut,
+    PlanSummaryOut,
+    TopologyOut,
+    ValveLockIn,
+)
 from .seed import reset_database, seed_database
 
 @asynccontextmanager
@@ -89,6 +97,76 @@ def calc_isolation(body: IsolationIn, db: Session = Depends(get_db)) -> Isolatio
     except isolation.TopologyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return IsolationOut(**payload)
+
+
+# ---------------- 联合隔离计划 ----------------
+
+
+@app.post("/api/plans", response_model=PlanOut)
+def create_plan(body: PlanCreateIn, db: Session = Depends(get_db)) -> PlanOut:
+    """创建联合隔离计划：同一物理连通图上对多个目标区域联合求解。
+
+    幂等：携带相同 request_key 重复提交时返回既有计划，
+    不新增关阀集合、不产生重复审计事件。
+    """
+    seed_database(db)
+    zones = [{"target_id": z.target_id, "essentials": z.essentials} for z in body.zones]
+    try:
+        plan, _created = plans.create_plan(db, body.name, body.request_key, zones)
+    except isolation.TopologyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PlanOut(**plans.plan_view(plan))
+
+
+@app.get("/api/plans", response_model=list[PlanSummaryOut])
+def list_plans(db: Session = Depends(get_db)) -> list[PlanSummaryOut]:
+    seed_database(db)
+    all_plans = db.scalars(
+        select(IsolationPlan).order_by(IsolationPlan.created_at.desc())
+    ).all()
+    return [
+        PlanSummaryOut(
+            id=p.id,
+            name=p.name,
+            status=p.status,
+            feasible=p.feasible,
+            close_valves=list(p.close_valves),
+            shared_valves=list(p.shared_valves),
+            zone_count=len(p.zones),
+            created_at=p.created_at,
+        )
+        for p in all_plans
+    ]
+
+
+@app.get("/api/plans/{plan_id}", response_model=PlanOut)
+def get_plan(plan_id: str, db: Session = Depends(get_db)) -> PlanOut:
+    """计划详情：区域状态、共享阀门、求解快照与全部审计事件（历史快照）。"""
+    try:
+        plan = plans.get_plan(db, plan_id)
+    except plans.PlanError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return PlanOut(**plans.plan_view(plan))
+
+
+@app.post("/api/plans/{plan_id}/execute", response_model=PlanOut)
+def execute_plan(plan_id: str, db: Session = Depends(get_db)) -> PlanOut:
+    """执行计划：联合关阀集合整体应用到阀门表（幂等）。"""
+    try:
+        plan = plans.execute_plan(db, plan_id)
+    except plans.PlanError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return PlanOut(**plans.plan_view(plan))
+
+
+@app.post("/api/plans/{plan_id}/zones/{zone_id}/release", response_model=PlanOut)
+def release_zone(plan_id: str, zone_id: str, db: Session = Depends(get_db)) -> PlanOut:
+    """释放一个区域：共享阀门保持关闭，专有阀门按计划恢复（幂等）。"""
+    try:
+        plan = plans.release_zone(db, plan_id, zone_id)
+    except plans.PlanError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return PlanOut(**plans.plan_view(plan))
 
 
 # 前端静态资源（ng build 产物）挂在根路径。挂载放在所有 /api 路由之后，

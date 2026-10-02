@@ -88,3 +88,61 @@ class IsolationOut(BaseModel):
     locked_witness_path: dict[str, Any] | None = None
     infeasible_reason: str | None = None
     unconstrained_best: dict[str, Any] | None = None
+
+
+# ---------------- 联合隔离计划 ----------------
+
+
+class PlanZoneIn(BaseModel):
+    target_id: str = Field(..., description="目标区域节点 id（非来源节点）")
+    essentials: list[str] = Field(
+        default_factory=list, description="该区域要求保供的必要供给点 id 列表"
+    )
+
+
+class PlanCreateIn(BaseModel):
+    name: str = Field("联合隔离计划", description="计划名称")
+    request_key: str | None = Field(
+        None, description="幂等键：同一键重复提交返回既有计划，不重复求解/审计"
+    )
+    zones: list[PlanZoneIn] = Field(..., min_length=1, description="目标区域列表")
+
+
+class PlanZoneOut(BaseModel):
+    id: str
+    target_id: str
+    essentials: list[str]
+    status: str
+    boundary_valves: list[str]
+
+
+class PlanEventOut(BaseModel):
+    seq: int
+    action: str
+    detail: dict[str, Any]
+    created_at: str
+
+
+class PlanOut(BaseModel):
+    id: str
+    name: str
+    status: str
+    feasible: bool
+    close_valves: list[str]
+    shared_valves: list[str]
+    zones: list[PlanZoneOut]
+    solve: dict[str, Any]
+    created_at: str
+    updated_at: str
+    events: list[PlanEventOut] = []
+
+
+class PlanSummaryOut(BaseModel):
+    id: str
+    name: str
+    status: str
+    feasible: bool
+    close_valves: list[str]
+    shared_valves: list[str]
+    zone_count: int
+    created_at: str

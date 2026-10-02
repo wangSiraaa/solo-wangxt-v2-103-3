@@ -32,6 +32,60 @@
         <button class="ghost" (click)="resetAll()">全部重置</button>
       </div>
 
+      <h2>联合隔离计划：登记目标区域</h2>
+      <p class="hint">一次检修可隔离多个区域；系统在同一连通图上联合求解、共享阀门去重。</p>
+      <div class="zone-form">
+        <label class="hint">目标区域</label>
+        <select [value]="draftTarget()" (change)="draftTarget.set($any($event.target).value)">
+          @for (t of targetOptions(); track t) {
+            <option [value]="t">{{ t }}（{{ nodeName(t) }}）</option>
+          }
+        </select>
+        <label class="hint">该区域要求保供的必要供给点</label>
+        <div class="ess-picks">
+          @for (p of essentialOptions(); track p) {
+            <label>
+              <input
+                type="checkbox"
+                [checked]="draftEssentials()[p]"
+                (change)="toggleDraftEssential(p)"
+              />
+              {{ p }}
+            </label>
+          }
+        </div>
+        <button (click)="addDraftZone()">＋ 添加区域</button>
+      </div>
+      @if (draftZones().length) {
+        <ul class="draft-zones">
+          @for (z of draftZones(); track z.target_id) {
+            <li>
+              <b>{{ z.target_id }}</b>
+              <span class="hint">保供：{{ z.essentials.join('、') || '无' }}</span>
+              <button class="ghost" (click)="removeDraftZone(z.target_id)">移除</button>
+            </li>
+          }
+        </ul>
+        <button class="primary" (click)="createPlan()">创建联合计划（{{ draftZones().length }} 区）</button>
+      }
+
+      @if (plans().length) {
+        <h2>已有计划</h2>
+        <ul class="plan-list">
+          @for (p of plans(); track p.id) {
+            <li>
+              <button class="plan-item" (click)="selectPlan(p.id)">
+                <b>{{ p.id }}</b>
+                <span class="chip" [attr.data-status]="p.status">
+                  {{ zoneStatusLabel(p.status) }}
+                </span>
+                <span class="hint">{{ p.zone_count }} 区 / {{ p.close_valves.length }} 阀</span>
+              </button>
+            </li>
+          }
+        </ul>
+      }
+
       <h2>阀门锁定（禁止操作）</h2>
       <p class="hint">勾选后该阀门保持当前状态、不参与候选关闭集合。</p>
       <ul class="valves">
@@ -57,12 +111,14 @@
     <!-- 中：拓扑图 -->
     <main class="panel graph-panel">
       <h2>管网拓扑（箭头=介质名义方向，紫虚线=旁路，★=必要供给点）</h2>
-      <app-network-graph [topology]="topology()" [result]="result()" />
+      <app-network-graph [topology]="topology()" [result]="result()" [plan]="activePlan()" />
       <div class="legend">
-        <span><i class="sw close"></i> 候选关闭阀</span>
-        <span><i class="sw supply"></i> 方案后供给路径</span>
+        <span><i class="sw close"></i> 关闭阀</span>
+        <span><i class="sw shared"></i> 区域共享阀</span>
+        <span><i class="sw supply"></i> 保供路径</span>
         <span><i class="sw residual"></i> 残余连通路径</span>
         <span><i class="sw witness"></i> 经锁定阀的见证路径</span>
+        <span><i class="sw zone"></i> 计划目标区域</span>
       </div>
     </main>
 
@@ -155,8 +211,153 @@
     </aside>
   </div>
 
+  <!-- 联合隔离计划详情（全宽） -->
+  @if (activePlan(); as plan) {
+    <section class="panel plan-panel">
+      <div class="plan-head">
+        <h2>
+          联合隔离计划 {{ plan.id }}
+          <span class="chip" [attr.data-status]="plan.status">
+            {{ zoneStatusLabel(plan.status) }}
+          </span>
+        </h2>
+        <div class="plan-actions">
+          @if (plan.status === 'prepared' && plan.feasible) {
+            <button class="primary" (click)="executePlan()">执行计划（应用关阀）</button>
+          }
+          <button class="ghost" (click)="activePlan.set(null)">关闭详情</button>
+        </div>
+      </div>
+
+      @if (plan.feasible) {
+        <div class="ok">
+          ✓ 联合求解可行：{{ plan.close_valves.length }} 只阀门（枚举
+          {{ plan.solve.examined_combinations }} 组），较各区域单独方案去重共享
+        </div>
+        <div class="plan-cols">
+          <div>
+            <h3>联合关阀集合（去重后）</h3>
+            <ul class="close-list">
+              @for (vid of plan.close_valves; track vid) {
+                <li>
+                  <b>{{ vid }}</b> {{ valveName(vid) }}
+                  @if (plan.shared_valves.includes(vid)) {
+                    <em class="shared-tag">
+                      共享 ← {{ joinIds(plan.solve.valve_zones[vid]) }}
+                    </em>
+                  } @else {
+                    <span class="hint">专有 ← {{ joinIds(plan.solve.valve_zones[vid]) }}</span>
+                  }
+                </li>
+              }
+            </ul>
+            <h3>各供给点保供路径</h3>
+            @for (p of plan.solve.required_essentials; track p) {
+              <div class="supply">
+                ★ <b>{{ p }}</b>（{{ joinIds(plan.solve.required_by[p]) }} 要求）：
+                <code>{{ plan.solve.supply_paths[p]?.join(' → ') || '—' }}</code>
+              </div>
+            }
+          </div>
+          <div>
+            <h3>区域隔离证据与释放</h3>
+            @for (z of plan.zones; track z.id) {
+              <div class="zone-card" [attr.data-status]="z.status">
+                <div class="zone-head">
+                  <b>{{ z.target_id }}</b>（{{ nodeName(z.target_id) }}）
+                  <span class="chip" [attr.data-status]="z.status">
+                    {{ zoneStatusLabel(z.status) }}
+                  </span>
+                  @if (z.status === 'executing') {
+                    <button (click)="releaseZone(z.id)">释放该区域</button>
+                  }
+                </div>
+                <div class="meta">
+                  隔离边界阀：{{ joinIds(z.boundary_valves) || '无需关阀' }}
+                  ｜ 要求保供：{{ joinIds(z.essentials) || '无' }}
+                </div>
+                @if (plan.solve.zone_evidence.length) {
+                  <div class="meta ok-line">
+                    证据：与全部来源断开（{{ plan.solve.sources.join('、') }} ✗→ {{ z.target_id }}）
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        </div>
+      } @else {
+        <div class="bad">✗ 联合计划无解：未应用任何部分方案</div>
+        <p class="reason">{{ plan.solve.infeasible_reason }}</p>
+        <div class="plan-cols">
+          @for (zr of plan.solve.zone_residuals; track zr.target_id) {
+            <div>
+              <h3>区域 {{ zr.target_id }} 的残余/锁阀见证</h3>
+              @if (zr.residual_path; as rp) {
+                <div class="path residual-p">
+                  <code>{{ rp.nodes.join(' → ') }}</code>
+                  <div class="meta">
+                    残余路径仍连通；经过阀门：{{ formatValves(rp.valves) }}
+                    @if (rp.locked_valves_on_path.length) {
+                      ｜含锁定阀：<b>{{ joinIds(rp.locked_valves_on_path) }}</b>
+                    }
+                  </div>
+                </div>
+              }
+              @if (zr.locked_witness_path; as wp) {
+                <div class="path witness-p">
+                  <code>{{ wp.nodes.join(' → ') }}</code>
+                  <div class="meta">
+                    锁定阀 {{ joinIds(wp.locked_valves_on_path) }} 不可关闭，介质仍可回到
+                    {{ zr.target_id }}
+                  </div>
+                </div>
+              }
+            </div>
+          }
+          @if (plan.solve.unconstrained_best; as ub) {
+            <div>
+              <h3>不可避免断供诊断</h3>
+              <p class="hint">
+                关闭 {{ joinIds(ub.close_valves) }}（{{ ub.size }} 只）即可同时切断全部目标，
+                但会断供：<b>{{ joinIds(ub.disconnects_essentials) }}</b>；其中
+                <b>{{ joinIds(ub.unavoidable_essentials) }}</b>
+                在任何联合切法下都无法保住，故计划整体无解。
+              </p>
+            </div>
+          }
+        </div>
+      }
+
+      <h3>历史快照（审计事件 {{ plan.events.length }} 条）</h3>
+      <ol class="events">
+        @for (e of plan.events; track e.seq) {
+          <li>
+            <b>#{{ e.seq }} {{ eventLabel(e.action) }}</b>
+            <span class="hint">{{ e.created_at }}</span>
+            <div class="meta">
+              @if (e.action === 'created') {
+                求解{{ plan.feasible ? '可行' : '无解' }}；关阀集合：{{
+                  joinIds(plan.close_valves) || '—'
+                }}
+              }
+              @if (e.detail['applied_close_valves']) {
+                应用关阀：{{ joinIds(e.detail['applied_close_valves']) }}
+              }
+              @if (e.detail['released_target']) {
+                释放 {{ e.detail['released_target'] }}；恢复：{{
+                  joinIds(e.detail['restored_valves'] ?? []) || '—'
+                }}；仍关闭：{{ joinIds(e.detail['still_closed_valves'] ?? []) || '—' }}
+              }
+            </div>
+          </li>
+        }
+      </ol>
+    </section>
+  }
+
   <footer>
     演示拓扑：来源 SRC — N1 — N2 — 设备T — N3；N2-BP-N3 旁路与 T 并联；
-    N1-N5-N3 环网联络；P1/P2 为不应断供支路。
+    N1-N5-N3 环网联络；N1-N6-(设备U/设备W 并联)-N7-N1 支管环（联合隔离演示）；
+    P1/P2/P3 为不应断供支路。
   </footer>
 </div>

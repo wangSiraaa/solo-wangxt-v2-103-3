@@ -77,7 +77,7 @@ def test_topology_seed_has_direction_bypass_and_essentials(fresh_db):
     assert by_id["E2"]["is_bypass"] is False
 
     # 必要供给点
-    assert {n["id"] for n in topo["nodes"] if n["essential"]} == {"P1", "P2"}
+    assert {n["id"] for n in topo["nodes"] if n["essential"]} == {"P1", "P2", "P3"}
     assert {n["id"] for n in topo["nodes"] if n["kind"] == "source"} == {"SRC"}
 
     # 全部阀门初始打开、未锁定

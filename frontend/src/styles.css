@@ -178,6 +178,181 @@ button:disabled {
 .sw.witness {
   background: #f87171;
 }
+.sw.shared {
+  background: #fbbf24;
+  height: 6px;
+}
+.sw.zone {
+  background: #e879f9;
+  height: 6px;
+}
+
+/* ---------------- 联合隔离计划 ---------------- */
+
+.zone-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.zone-form select {
+  padding: 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.ess-picks {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.draft-zones {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.draft-zones li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.draft-zones .hint {
+  flex: 1;
+}
+
+.plan-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.plan-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  margin-bottom: 4px;
+}
+
+.plan-item .hint {
+  margin-left: auto;
+}
+
+.chip {
+  font-size: 11px;
+  border-radius: 10px;
+  padding: 1px 8px;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.chip[data-status='executing'] {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.chip[data-status='released'] {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.chip[data-status='infeasible'] {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.plan-panel {
+  margin-top: 16px;
+}
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plan-head h2 {
+  margin: 0;
+}
+
+.plan-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.plan-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+@media (max-width: 1000px) {
+  .plan-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.shared-tag {
+  font-style: normal;
+  font-size: 11px;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fbbf24;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.zone-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.zone-card[data-status='released'] {
+  opacity: 0.65;
+  background: #f8fafc;
+}
+
+.zone-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.zone-head button {
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.ok-line {
+  color: #166534;
+}
+
+.events {
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.events li {
+  margin-bottom: 6px;
+}
+
+.events .hint {
+  margin-left: 8px;
+}
 
 .ok {
   background: #dcfce7;

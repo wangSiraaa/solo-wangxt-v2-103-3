@@ -8,13 +8,15 @@ import {
   ViewChild,
 } from '@angular/core';
 import cytoscape from 'cytoscape';
-import { IsolationResult, Topology } from './models';
+import { IsolationPlan, IsolationResult, Topology } from './models';
 
 /**
  * Cytoscape.js 拓扑渲染：
  * - 节点：来源 / 目标设备 / 必要供给点 / 普通节点
  * - 边：管段（按保存的名义方向显示箭头），旁路使用虚线
- * - 高亮：候选关闭阀（红）、残余/绕回供给路径（橙/绿）
+ * - 单目标高亮：候选关闭阀（红）、残余/绕回供给路径（橙/青）
+ * - 联合计划高亮：区域目标（紫框）、计划关阀（红）、共享阀（金色加粗）、
+ *   保供路径（青）、无解时各区残余/锁阀见证路径（橙/红）
  */
 @Component({
   selector: 'app-network-graph',
@@ -34,6 +36,7 @@ import { IsolationResult, Topology } from './models';
 export class NetworkGraphComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() topology: Topology | null = null;
   @Input() result: IsolationResult | null = null;
+  @Input() plan: IsolationPlan | null = null;
 
   @ViewChild('cy') cyHost!: ElementRef<HTMLDivElement>;
 
@@ -128,6 +131,14 @@ export class NetworkGraphComponent implements AfterViewInit, OnChanges, OnDestro
           style: { 'border-color': '#f8fafc', 'border-width': 4 },
         },
         {
+          selector: 'node.zone-target',
+          style: { 'border-color': '#e879f9', 'border-width': 4 },
+        },
+        {
+          selector: 'node.zone-released',
+          style: { opacity: 0.45 },
+        },
+        {
           selector: 'edge',
           style: {
             width: 2.5,
@@ -158,6 +169,15 @@ export class NetworkGraphComponent implements AfterViewInit, OnChanges, OnDestro
             'target-arrow-color': '#ef4444',
             width: 5,
             color: '#fca5a5',
+          },
+        },
+        {
+          selector: 'edge.shared',
+          style: {
+            'line-color': '#fbbf24',
+            'target-arrow-color': '#fbbf24',
+            width: 7,
+            color: '#fde68a',
           },
         },
         {
@@ -199,9 +219,8 @@ export class NetworkGraphComponent implements AfterViewInit, OnChanges, OnDestro
 
   private applyHighlights(): void {
     const cy = this.cy;
-    const result = this.result;
     const topo = this.topology;
-    if (!cy || !result || !topo) {
+    if (!cy || !topo) {
       return;
     }
 
@@ -210,6 +229,24 @@ export class NetworkGraphComponent implements AfterViewInit, OnChanges, OnDestro
       if (s.valve_id) {
         edgeByValve.set(s.valve_id, s.id);
       }
+    }
+
+    const markPath = (nodePath: string[], cls: string) => {
+      nodePath.forEach((n) => cy.$(`node#${n}`).addClass('onpath'));
+      for (let i = 0; i < nodePath.length - 1; i++) {
+        cy.edges(`[source = "${nodePath[i]}"][target = "${nodePath[i + 1]}"]`).addClass(cls);
+        cy.edges(`[source = "${nodePath[i + 1]}"][target = "${nodePath[i]}"]`).addClass(cls);
+      }
+    };
+
+    if (this.plan) {
+      this.applyPlanHighlights(cy, topo, edgeByValve, markPath);
+      return;
+    }
+
+    const result = this.result;
+    if (!result) {
+      return;
     }
 
     // 目标设备
@@ -225,28 +262,69 @@ export class NetworkGraphComponent implements AfterViewInit, OnChanges, OnDestro
       }
       // 方案后必要供给点的来源路径
       for (const path of Object.values(best.supply_paths)) {
-        if (!path) {
-          continue;
-        }
-        path.forEach((n) => cy.$(`node#${n}`).addClass('onpath'));
-        for (let i = 0; i < path.length - 1; i++) {
-          cy.edges(`[source = "${path[i]}"][target = "${path[i + 1]}"]`).addClass('supply');
-          cy.edges(`[source = "${path[i + 1]}"][target = "${path[i]}"]`).addClass('supply');
+        if (path) {
+          markPath(path, 'supply');
         }
       }
     } else if (!result.feasible) {
-      const mark = (nodePath: string[], cls: string) => {
-        nodePath.forEach((n) => cy.$(`node#${n}`).addClass('onpath'));
-        for (let i = 0; i < nodePath.length - 1; i++) {
-          cy.edges(`[source = "${nodePath[i]}"][target = "${nodePath[i + 1]}"]`).addClass(cls);
-          cy.edges(`[source = "${nodePath[i + 1]}"][target = "${nodePath[i]}"]`).addClass(cls);
-        }
-      };
       if (result.residual_path) {
-        mark(result.residual_path.nodes, 'residual');
+        markPath(result.residual_path.nodes, 'residual');
       }
       if (result.locked_witness_path) {
-        mark(result.locked_witness_path.nodes, 'witness');
+        markPath(result.locked_witness_path.nodes, 'witness');
+      }
+    }
+  }
+
+  /** 联合计划高亮：与数据库阀门状态联动——只高亮当前仍关闭的计划阀门，
+   *  区域释放并刷新拓扑后，对应高亮自动消退。 */
+  private applyPlanHighlights(
+    cy: cytoscape.Core,
+    topo: Topology,
+    edgeByValve: Map<string, string>,
+    markPath: (path: string[], cls: string) => void,
+  ): void {
+    const plan = this.plan!;
+    const closedNow = new Set(topo.valves.filter((v) => !v.is_open).map((v) => v.id));
+    const shared = new Set(plan.shared_valves);
+
+    // 区域目标节点（已释放区域淡化）
+    for (const z of plan.zones) {
+      cy.$(`node#${z.target_id}`).addClass('zone-target');
+      if (z.status === 'released') {
+        cy.$(`node#${z.target_id}`).addClass('zone-released');
+      }
+    }
+
+    // 计划关阀：共享阀金色加粗、专有阀红色；仅高亮当前仍关闭的
+    for (const vid of plan.close_valves) {
+      if (!closedNow.has(vid)) {
+        continue;
+      }
+      const eid = edgeByValve.get(vid);
+      if (eid) {
+        cy.$(`edge#${eid}`).addClass(shared.has(vid) ? 'shared' : 'close');
+      }
+    }
+
+    if (plan.feasible) {
+      // 各供给点保供路径（计划未完全释放时展示）
+      if (plan.status !== 'released') {
+        for (const path of Object.values(plan.solve.supply_paths ?? {})) {
+          if (path) {
+            markPath(path, 'supply');
+          }
+        }
+      }
+    } else {
+      // 无解：各区域残余路径与经锁定阀见证路径
+      for (const zr of plan.solve.zone_residuals ?? []) {
+        if (zr.residual_path) {
+          markPath(zr.residual_path.nodes, 'residual');
+        }
+        if (zr.locked_witness_path) {
+          markPath(zr.locked_witness_path.nodes, 'witness');
+        }
       }
     }
   }

@@ -1,7 +1,7 @@
-"""数据库模型：节点（设备/供给点）、管段、阀门。"""
+"""数据库模型：节点（设备/供给点）、管段、阀门、联合隔离计划。"""
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -59,3 +59,74 @@ class Segment(Base):
     valve: Mapped["Valve | None"] = relationship(back_populates="segment", uselist=False)
 
     __table_args__ = (UniqueConstraint("upstream_id", "downstream_id", name="uq_segment_endpoints"),)
+
+
+class IsolationPlan(Base):
+    """联合隔离计划：在同一物理连通图上对多个目标区域联合求解的关阀方案。
+
+    status: prepared（已生成/准备）-> executing（执行中，关阀已应用）
+            -> released（全部区域释放，阀门按计划恢复）；
+            infeasible（联合求解无解，仅存见证，不可执行）。
+    request_key: 客户端幂等键——同一键重复提交返回既有计划，
+                 不新增关阀集合、不产生重复审计事件。
+    solve_snapshot: 创建时联合求解结果（含共享阀门、各区隔离证据、
+                    保供路径或残余/锁阀见证）的完整快照，历史可查。
+    valve_snapshot: 执行时计划阀门的事前状态，释放时按计划恢复。
+    """
+
+    __tablename__ = "isolation_plans"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    request_key: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="prepared")
+    feasible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    close_valves: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    shared_valves: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    solve_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    valve_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    zones: Mapped[list["PlanZone"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="PlanZone.seq"
+    )
+    events: Mapped[list["PlanEvent"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="PlanEvent.seq"
+    )
+
+
+class PlanZone(Base):
+    """计划内的一个目标区域：目标节点 + 该区域要求保供的必要供给点。
+
+    status: prepared（准备）-> executing（执行）-> released（已释放）。
+    boundary_valves: 联合关阀集合中该区域隔离所依赖的阀门（归因结果）；
+                     被 ≥2 个区域依赖的即共享阀门，释放时须最后恢复。
+    """
+
+    __tablename__ = "plan_zones"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("isolation_plans.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    essentials: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="prepared")
+    boundary_valves: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    plan: Mapped[IsolationPlan] = relationship(back_populates="zones")
+
+
+class PlanEvent(Base):
+    """计划审计事件：创建/执行/区域释放/计划释放，detail 为该时刻计划快照。"""
+
+    __tablename__ = "plan_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("isolation_plans.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    plan: Mapped[IsolationPlan] = relationship(back_populates="events")
